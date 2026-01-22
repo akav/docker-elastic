@@ -1,33 +1,86 @@
-Eagerly waiting for Docker 19.06 release which will bring --privileged flag to Docker Swarm Mode https://github.com/moby/moby/issues/24862#issuecomment-451594187. support for capabilities https://github.com/moby/moby/pull/38380
+# Auditbeat Manual Deployment
 
-Until capabilities are available in docker swarm mode, execute the following instructions on each node where auditbeat is required
+Docker Swarm now supports capabilities (since Docker 19.03+), but for maximum compatibility or when running outside of Swarm mode, you can deploy Auditbeat manually using the instructions below.
 
-Firstly, set the system variables as needed:
-- export ELASTIC_VERSION=7.9.1
-- export ELASTICSEARCH_USERNAME=elastic
-- export ELASTICSEARCH_PASSWORD=changeme
-- export ELASTICSEARCH_HOST=node1
-- export KIBANA_HOST=node1
-- export NODE_NAME=node1
+## Prerequisites
 
-And than run the command below:
+- Docker 19.03+ installed
+- Elasticsearch cluster running and accessible
+- Kibana running (optional, for dashboards)
+
+## Manual Deployment
+
+Set the required environment variables:
+
+```bash
+export ELASTIC_VERSION=9.2.4
+export ELASTICSEARCH_USERNAME=elastic
+export ELASTICSEARCH_PASSWORD=changeme
+export ELASTICSEARCH_HOST=node1
+export KIBANA_HOST=node1
+export NODE_NAME=$(hostname)
 ```
-    docker container run \
+
+Run Auditbeat:
+
+```bash
+docker container run \
     --rm --detach \
-    --hostname=${NODE_NAME:-node1}-auditbeat \
+    --hostname=${NODE_NAME}-auditbeat \
     --name=auditbeat \
     --user=root \
-    --volume=$PWD/elk/beats/auditbeat/config/auditbeat.yml:/usr/share/auditbeat/auditbeat.yml \
-    --cap-add="AUDIT_READ" \
-    --cap-add="AUDIT_CONTROL" \
+    --volume=$PWD/elk/beats/auditbeat/config/auditbeat.yml:/usr/share/auditbeat/auditbeat.yml:ro \
+    --volume=/var/log:/var/log:ro \
+    --volume=/etc/passwd:/hostfs/etc/passwd:ro \
+    --volume=/etc/group:/hostfs/etc/group:ro \
+    --cap-add=AUDIT_READ \
+    --cap-add=AUDIT_CONTROL \
     --pid=host \
-    --volume=/var/run/docker.sock:/var/run/docker.sock \
-    --env ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME:-elastic} \
-    --env ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme} \
-    --env ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-node1} \
-    --env KIBANA_HOST=${KIBANA_HOST:-node1} \
-    docker.elastic.co/beats/auditbeat:${ELASTIC_VERSION:-7.9.1} \
+    --env ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME} \
+    --env ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD} \
+    --env ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST} \
+    --env KIBANA_HOST=${KIBANA_HOST} \
+    docker.elastic.co/beats/auditbeat:${ELASTIC_VERSION} \
     --strict.perms=false
 ```
 
-> Unfortunately, Centos 7 doesn't know about `CAP_AUDIT_READ`. It was added in kernel version 3.16, but Centos 7 runs kernel version 3.10.
+## Verifying the Deployment
+
+Check if Auditbeat is running:
+
+```bash
+docker logs auditbeat
+```
+
+Verify data in Elasticsearch:
+
+```bash
+curl -u ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD} \
+    "http://${ELASTICSEARCH_HOST}:9200/_cat/indices/auditbeat-*?v"
+```
+
+## Stopping Auditbeat
+
+```bash
+docker container stop auditbeat
+```
+
+## Notes
+
+- **Kernel Requirements**: The `AUDIT_READ` capability requires kernel version 3.16 or later. Older distributions like CentOS 7 (kernel 3.10) may not support all features.
+- **Ubuntu/Debian**: Ensure auditd is installed: `sudo apt-get install -y auditd audispd-plugins`
+- **Security**: In Elastic 9.x, security is enabled by default. For SSL/TLS connections, add the appropriate certificate configuration.
+
+## Docker Swarm Deployment
+
+For Docker Swarm deployments (Docker 19.03+), use the compose file instead:
+
+```bash
+export ELASTIC_VERSION=9.2.4
+export ELASTICSEARCH_HOST=node1
+export KIBANA_HOST=node1
+export ELASTICSEARCH_USERNAME=elastic
+export ELASTICSEARCH_PASSWORD=changeme
+
+docker stack deploy --compose-file auditbeat-docker-compose.yml auditbeat
+```

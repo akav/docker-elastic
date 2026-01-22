@@ -1,31 +1,73 @@
-sudo: required
-dist: bionic
-before_install:
-  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-  - sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-  - sudo apt-get update
-  - sudo apt-get -y -o Dpkg::Options::="--force-confnew" install docker-ce
-  - docker --version
+# Travis CI Configuration for Elastic Stack 9.x
+# https://docs.travis-ci.com/user/reference/overview/
+
+dist: jammy  # Ubuntu 22.04 LTS
 
 services:
   - docker
 
-before_script:
-  # https://www.elastic.co/guide/en/elasticsearch/reference/5.0/vm-max-map-count.html
-  - sudo sysctl -w vm.max_map_count=262144
+env:
+  global:
+    - ELASTIC_VERSION=9.2.4
+    - ELASTICSEARCH_USERNAME=elastic
+    - ELASTICSEARCH_PASSWORD=changeme
+    - DOCKER_COMPOSE_VERSION=2.24.0
 
-script:
+before_install:
+  # Install latest Docker Compose
+  - sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+  - sudo chmod +x /usr/local/bin/docker-compose
+  - docker --version
+  - docker-compose --version
+
+before_script:
+  # Set vm.max_map_count for Elasticsearch
+  # https://www.elastic.co/guide/en/elasticsearch/reference/current/vm-max-map-count.html
+  - sudo sysctl -w vm.max_map_count=262144
+  # Initialize Docker Swarm
   - docker swarm init
   - docker node ls
+
+script:
   - chmod +x *.sh
+  # Deploy Elastic Stack
   - ./deployStack.sh
-  - sleep 180
-  - docker run -d --rm --name jenkins -p 8080:8080 jenkinsci/blueocean
-  - sleep 120
+  # Wait for services to be ready
+  - |
+    echo "Waiting for Elasticsearch to be ready..."
+    for i in {1..60}; do
+      if curl -s -u ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD} http://127.0.0.1:9200/_cluster/health | grep -q '"status":"green"\|"status":"yellow"'; then
+        echo "Elasticsearch is ready!"
+        break
+      fi
+      echo "Waiting... ($i/60)"
+      sleep 5
+    done
+  # Run test container
+  - docker run -d --rm --name jenkins -p 8080:8080 jenkins/jenkins:lts-jdk17
+  # Wait for Jenkins to start
+  - sleep 60
 
 after_script:
+  # Show service status
   - docker stack services elastic
-  - docker stack ps elastic
-  #List all Elasticsearch Indices. One entry sould be for logstash containing console logs for Jenkins
-  - curl -XGET -u elastic:changeme '127.0.0.1:9200/_cat/indices?v&pretty'
+  - docker stack ps elastic --no-trunc
+  # List all Elasticsearch indices
+  - curl -s -u ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD} 'http://127.0.0.1:9200/_cat/indices?v&pretty'
+  # Check cluster health
+  - curl -s -u ${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD} 'http://127.0.0.1:9200/_cluster/health?pretty'
+  # Cleanup
+  - docker container stop jenkins || true
   - ./removeStack.sh
+
+# Build timeout (default is 50 minutes)
+# Elastic Stack needs time to initialize
+jobs:
+  include:
+    - stage: test
+      name: "Elastic Stack 9.x Integration Test"
+
+# Notifications (optional - configure as needed)
+# notifications:
+#   slack:
+#     secure: "your-encrypted-slack-webhook"

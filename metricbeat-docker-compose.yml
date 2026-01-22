@@ -1,9 +1,10 @@
-version: "3.8"
+# Metricbeat 9.x Docker Swarm Deployment
+# https://www.elastic.co/guide/en/beats/metricbeat/current/running-on-docker.html
 
 services:
 
   metricbeat:
-    image: docker.elastic.co/beats/metricbeat:${ELASTIC_VERSION:-7.9.1}
+    image: docker.elastic.co/beats/metricbeat:${ELASTIC_VERSION:-9.2.4}
     # https://github.com/docker/swarmkit/issues/1951
     hostname: "{{.Node.Hostname}}-metricbeat"
     user: root
@@ -16,7 +17,7 @@ services:
       - /proc:/hostfs/proc:ro
       - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
       - /:/hostfs:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - metricbeat:/usr/share/metricbeat/data
     environment:
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-node1}
@@ -25,14 +26,23 @@ services:
       - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme}
     # disable strict permission checks
     command: ["--strict.perms=false", "-system.hostfs=/hostfs"]
+    healthcheck:
+      test: ["CMD-SHELL", "metricbeat test config || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       mode: global
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
 networks:
   elastic:
     external: true
-    # https://www.elastic.co/guide/en/beats/metricbeat/current/running-on-docker.html#monitoring-host
-    name: host
 
 volumes:
   metricbeat:

@@ -1,10 +1,11 @@
-version: '3.8'
+# Portainer CE (Community Edition) for Docker Swarm Management
+# https://docs.portainer.io/start/install-ce/server/swarm/linux
 
 services:
   agent:
-    image: portainer/agent:latest
+    image: portainer/agent:2.19.4
     environment:
-      # REQUIRED: Should be equal to the service name prefixed by "tasks." when
+      # Should be equal to the service name prefixed by "tasks." when
       # deployed inside an overlay network
       AGENT_CLUSTER_ADDR: tasks.agent
       # AGENT_PORT: 9001
@@ -20,11 +21,11 @@ services:
         constraints: [node.platform.os == linux]
 
   portainer:
-    image: portainer/portainer:latest
-#    command: -H tcp://tasks.agent:9001 --tlsskipverify
-    command: ["-H", "tcp://tasks.agent:9001", "--tlsskipverify", "--no-auth"]
+    image: portainer/portainer-ce:2.19.4
+    command: -H tcp://tasks.agent:9001 --tlsskipverify
     ports:
       - "9000:9000"
+      - "9443:9443"
     volumes:
       - portainer_data:/data
     networks:
@@ -42,3 +43,10 @@ networks:
 
 volumes:
   portainer_data:
+
+# SECURITY NOTE:
+# - Authentication is ENABLED by default (removed --no-auth flag)
+# - On first access, you will be prompted to create an admin user
+# - For production, consider enabling HTTPS on port 9443
+# - You can also use --admin-password to set initial password:
+#   command: -H tcp://tasks.agent:9001 --tlsskipverify --admin-password='$2y$05$...'

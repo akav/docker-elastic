@@ -1,60 +1,78 @@
-# https://github.com/elastic/beats/blob/master/filebeat/filebeat.reference.yml
+# Filebeat 9.x Configuration
+# Reference: https://github.com/elastic/beats/blob/main/filebeat/filebeat.reference.yml
 
+#=========================== Filebeat Modules ================================
 filebeat.modules:
-- module: system
-  syslog:
-    enabled: true
-  auth:
-    enabled: true
-- module: auditd
-  log:
-    # - Does not look like Auditd is supported in Alpine linux: https://github.com/linuxkit/linuxkit/issues/52
-    # - CentOS does not need us to install the audit system, it ships as standard. If you are using Ubuntu, though,
-    # this is probably something you would want to install. (sudo apt-get install -y auditd audispd-plugins)
-    enabled: true
+  - module: system
+    syslog:
+      enabled: true
+    auth:
+      enabled: true
 
+  - module: auditd
+    log:
+      # Auditd is not supported in Alpine Linux: https://github.com/linuxkit/linuxkit/issues/52
+      # On Ubuntu, install with: sudo apt-get install -y auditd audispd-plugins
+      enabled: true
+
+#=========================== Filebeat Inputs =================================
+# Uncomment to enable container log collection
 #filebeat.inputs:
-#- type: container
-#  enabled: true
-#  paths:
-#    -/var/lib/docker/containers/*/*.log
-#  stream: all # can be all, stdout or stderr
+#  - type: container
+#    enabled: true
+#    paths:
+#      - /var/lib/docker/containers/*/*.log
+#    stream: all  # can be: all, stdout, stderr
 
-#========================== Filebeat autodiscover ==============================
-# See this URL on how to run Apache2 Filebeat module: # https://www.elastic.co/guide/en/beats/filebeat/current/running-on-docker.html
+#=========================== Filebeat Autodiscover ===========================
+# https://www.elastic.co/guide/en/beats/filebeat/current/configuration-autodiscover.html
 filebeat.autodiscover:
   providers:
     - type: docker
       # https://www.elastic.co/guide/en/beats/filebeat/current/configuration-autodiscover-hints.html
-      # This URL alos contains instructions on multi-line logs
       hints.enabled: true
+      hints.default_config:
+        type: container
+        paths:
+          - /var/lib/docker/containers/${data.container.id}/*.log
 
-#================================ Processors ===================================
+#================================ Processors =================================
 processors:
-- add_cloud_metadata: ~
-- add_docker_metadata: ~
-- add_locale:
-    format: offset
-- add_host_metadata:
-    netinfo.enabled: true
+  - add_cloud_metadata: ~
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+  - add_locale:
+      format: offset
+  - add_host_metadata:
+      netinfo.enabled: true
 
-#========================== Elasticsearch output ===============================
+#========================== Elasticsearch Output =============================
 output.elasticsearch:
   hosts: ["${ELASTICSEARCH_HOST}:9200"]
   username: ${ELASTICSEARCH_USERNAME}
   password: ${ELASTICSEARCH_PASSWORD}
+  # Uncomment for SSL/TLS connections
+  #ssl.certificate_authorities: ["/etc/pki/root/ca.pem"]
 
-#============================== Dashboards =====================================
+#============================== Dashboards ===================================
 setup.dashboards:
   enabled: true
 
-#============================== Kibana =========================================
+#============================== Kibana =======================================
 setup.kibana:
-  host: "${KIBANA_HOST}:80"
+  host: "${KIBANA_HOST}:5601"
   username: ${ELASTICSEARCH_USERNAME}
   password: ${ELASTICSEARCH_PASSWORD}
 
-#============================== Xpack Monitoring ===============================
-xpack.monitoring:
+#============================== Monitoring ===================================
+# In Elastic 8.x+, use monitoring.* instead of deprecated xpack.monitoring.*
+monitoring:
   enabled: true
   elasticsearch:
+    hosts: ["${ELASTICSEARCH_HOST}:9200"]
+    username: ${ELASTICSEARCH_USERNAME}
+    password: ${ELASTICSEARCH_PASSWORD}
+
+#============================== Logging ======================================
+logging.level: info
+logging.to_files: false

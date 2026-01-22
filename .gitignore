@@ -38,3 +38,17 @@
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Environment files #
+#####################
+.env
+.env.local
+.env.*.local
+*.env
+
+# Editor files #
+################
+*.swp
+*.swo
+*~
+.vscode/

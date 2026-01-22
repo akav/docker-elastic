@@ -1,76 +1,56 @@
-version: "3.8"
-
-# 10 Things to Consider When Planning Your Elasticsearch Project: https://ecmarchitect.com/archives/2015/07/27/4031
-# Using Apache JMeter to Test Elasticsearch: https://ecmarchitect.com/archives/2014/09/02/3915
+# Elastic Stack 9.x Docker Swarm Deployment
+# Optimized for Linux Docker Swarm
 
 services:
 
-  swarm-listener:
-    image: dockerflow/docker-flow-swarm-listener:latest
-    hostname: swarm-listener
-    networks:
-      - elastic
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock"
-    environment:
-      - DF_NOTIFY_CREATE_SERVICE_URL=http://proxy:8080/v1/docker-flow-proxy/reconfigure
-      - DF_NOTIFY_REMOVE_SERVICE_URL=http://proxy:8080/v1/docker-flow-proxy/remove
-    deploy:
-      placement:
-        constraints: [node.role == manager]
-
-  proxy:
-    image: dockerflow/docker-flow-proxy:latest
-    hostname: proxy
-    ports:
-      - "80:80"
-      - "443:443"
-      - "9200:9200"
-      - "8200:8200"
-    networks:
-      - elastic
-    environment:
-      - LISTENER_ADDRESS=swarm-listener
-      - MODE=swarm
-      - BIND_PORTS=9200,8200
-    deploy:
-      replicas: 2
-
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-7.9.1}
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.2.4}
+    ports:
+      - "9200:9200"
+      - "9300:9300"
     environment:
-      # https://github.com/docker/swarmkit/issues/1951
-      - node.name={{.Node.Hostname}}
-      - discovery.seed_hosts=elasticsearch
-      - cluster.initial_master_nodes=${INITIAL_MASTER_NODES:-node1}
+      # Cluster configuration
+      - node.name=es-{{.Task.Slot}}
       - cluster.name=DevOps
+      - network.host=0.0.0.0
+      # Discovery - use single-node for development, or set DISCOVERY_TYPE=multi-node for cluster
+      - discovery.type=${DISCOVERY_TYPE:-single-node}
+      # Security settings
       - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme}
       - xpack.security.enabled=true
-      - xpack.monitoring.collection.enabled=true
       - xpack.security.audit.enabled=true
-      - xpack.license.self_generated.type=trial
-      - network.host=0.0.0.0
+      # Prevent accidental index deletion
+      - action.destructive_requires_name=true
+      # Memory settings - adjust based on available RAM
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     networks:
       - elastic
     volumes:
       - elasticsearch:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -u elastic:${ELASTICSEARCH_PASSWORD:-changeme} http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     deploy:
-      mode: 'global'
-      endpoint_mode: dnsrr
-      labels:
-        - com.df.notify=true
-        - com.df.distribute=true
-        - com.df.servicePath=/
-        - com.df.port=9200
-        - com.df.srcPort=9200
+      replicas: 1
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
 
   logstash:
-    image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION:-7.9.1}
+    image: docker.elastic.co/logstash/logstash:${ELASTIC_VERSION:-9.2.4}
     hostname: "{{.Node.Hostname}}-logstash"
     environment:
-      - XPACK_MONITORING_ELASTICSEARCH_URL=http://elasticsearch:9200
-      - XPACK_MONITORING_ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME:-elastic}
-      - XPACK_MONITORING_ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme}
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME:-elastic}
+      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme}
+      # Monitoring via Elastic Agent is recommended for 8.x+
+      - MONITORING_ENABLED=false
+      - "LS_JAVA_OPTS=-Xms512m -Xmx512m"
     ports:
       - "12201:12201/udp"
     networks:
@@ -78,58 +58,86 @@ services:
     configs:
       - source: ls_config
         target: /usr/share/logstash/pipeline/logstash.conf
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Setup service - runs once to configure Elasticsearch users
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.2.4}
+    user: "0"
+    command: >
+      bash -c '
+        echo "Waiting for Elasticsearch to be ready..."
+        until curl -sf -u elastic:${ELASTICSEARCH_PASSWORD:-changeme} http://elasticsearch:9200/_cluster/health; do
+          sleep 5
+        done
+        echo "Setting kibana_system password..."
+        curl -sf -X POST -u elastic:${ELASTICSEARCH_PASSWORD:-changeme} \
+          -H "Content-Type: application/json" \
+          http://elasticsearch:9200/_security/user/kibana_system/_password \
+          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD:-changeme}\"}"
+        echo ""
+        echo "Setup complete!"
+      '
+    networks:
+      - elastic
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+      resources:
+        limits:
+          memory: 256M
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-7.9.1}
-    hostname: "{{.Node.Hostname}}-kibana"
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-9.2.4}
+    hostname: kibana
+    ports:
+      - "5601:5601"
     environment:
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
-      - ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME:-elastic}
-      - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme}
-      - SERVER_NAME="{{.Node.Hostname}}-kibana"
+      - SERVER_NAME=kibana
+      - SERVER_HOST=0.0.0.0
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      # Must use kibana_system user, not elastic superuser (Elastic 8+ requirement)
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_SYSTEM_PASSWORD:-changeme}
+      # Encryption key must be exactly 32 characters
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY:-aV67MfXdown18LNlA9Jt3kWuaC2xYz99}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY:-aV67MfXdown18LNlA9Jt3kWuaC2xYz99}
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY:-aV67MfXdown18LNlA9Jt3kWuaC2xYz99}
+      # Disable strict Content Security Policy for development
+      - CSP_STRICT=false
     networks:
       - elastic
     volumes:
       - kibana:/usr/share/kibana/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
     deploy:
-      labels:
-        - com.df.notify=true
-        - com.df.distribute=true
-        - com.df.servicePath=/
-        - com.df.port=5601
-        - com.df.srcPort=80
-  
-  apm-server:
-    image: docker.elastic.co/apm/apm-server:${ELASTIC_VERSION:-7.9.1}
-    hostname: "{{.Node.Hostname}}-apm-server"
-    networks:
-      - elastic
-    command: > 
-        --strict.perms=false -e
-        -E apm-server.rum.enabled=true
-        -E setup.kibana.host=kibana:5601
-        -E setup.kibana.username=${ELASTICSEARCH_USERNAME}
-        -E setup.kibana.password=${ELASTICSEARCH_PASSWORD}
-        -E setup.template.settings.index.number_of_replicas=0
-        -E apm-server.kibana.enabled=true
-        -E apm-server.kibana.host=kibana:5601
-        -E apm-server.kibana.username=${ELASTICSEARCH_USERNAME}
-        -E apm-server.kibana.password=${ELASTICSEARCH_PASSWORD}
-        -E output.elasticsearch.hosts=["elasticsearch:9200"]
-        -E output.elasticsearch.username=${ELASTICSEARCH_USERNAME}
-        -E output.elasticsearch.password=${ELASTICSEARCH_PASSWORD}
-        -E xpack.monitoring.enabled=true
-    deploy:
-      labels:
-        - com.df.notify=true
-        - com.df.distribute=true
-        - com.df.servicePath=/
-        - com.df.port=8200
-        - com.df.srcPort=8200
-      
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
 networks:
-    elastic:
-      external: true
+  elastic:
+    driver: overlay
+    attachable: true
 
 volumes:
   elasticsearch:
@@ -137,4 +145,4 @@ volumes:
 
 configs:
   ls_config:
-    file: $PWD/elk/logstash/config/pipeline/logstash.conf
+    file: ./elk/logstash/config/pipeline/logstash.conf

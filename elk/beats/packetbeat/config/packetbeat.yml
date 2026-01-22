@@ -1,4 +1,7 @@
-#============================== Network device ================================
+# Packetbeat 9.x Configuration
+# Reference: https://github.com/elastic/beats/blob/main/packetbeat/packetbeat.reference.yml
+
+#============================== Network Device ================================
 packetbeat.interfaces.device: any
 
 #================================== Flows =====================================
@@ -6,61 +9,82 @@ packetbeat.flows:
   timeout: 30s
   period: 10s
 
-#========================== Transaction protocols =============================
+#========================== Transaction Protocols =============================
 packetbeat.protocols:
-- type: http
-  ports: [80, 8080, 5000]
-  send_headers: true
-  send_all_headers: true
+  - type: icmp
+    enabled: true
 
-- type: tls
-  ports: [443]
-  send_certificates: false
+  - type: dns
+    ports: [53]
+    include_authorities: true
+    include_additionals: true
 
-#=========================== Monitored processes ==============================
+  - type: http
+    ports: [80, 8080, 5000, 8000, 9200]
+    send_headers: true
+    send_all_headers: true
+    real_ip_header: "X-Forwarded-For"
+
+  - type: tls
+    ports: [443, 8443]
+    send_certificates: false
+
+  - type: mysql
+    ports: [3306]
+
+  - type: pgsql
+    ports: [5432]
+
+  - type: redis
+    ports: [6379]
+
+  - type: mongodb
+    ports: [27017]
+
+#=========================== Monitored Processes ==============================
 packetbeat.procs:
   enabled: false
   monitored:
     - process: pgsql
       cmdline_grep: postgres
 
-#================================ Processors ===================================
-# For example, you can use the following processors to keep the fields that
-# contain CPU load percentages, but remove the fields that contain CPU ticks
-# values:
+#================================ Processors =================================
 processors:
-- include_fields:
-   fields: ["cpu"]
-- drop_fields:
-   fields: ["cpu.user", "cpu.system"]
-# The following example drops the events that have the HTTP response code 200:
-- drop_event:
-   when:
-      equals:
-          http.code: 200
-# The following example enriches each event with metadata from the cloud provider about the host machine.
-- add_docker_metadata:
-   host: "unix:///var/run/docker.sock"
-- add_cloud_metadata: ~
-- add_locale: ~
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+  - add_cloud_metadata: ~
+  - add_locale:
+      format: offset
+  - add_host_metadata:
+      netinfo.enabled: true
 
-#========================== Elasticsearch output ===============================
+#========================== Elasticsearch Output =============================
 output.elasticsearch:
   hosts: ["${ELASTICSEARCH_HOST}:9200"]
   username: ${ELASTICSEARCH_USERNAME}
   password: ${ELASTICSEARCH_PASSWORD}
+  # Uncomment for SSL/TLS connections
+  #ssl.certificate_authorities: ["/etc/pki/root/ca.pem"]
 
-#============================== Dashboards =====================================
+#============================== Dashboards ===================================
 setup.dashboards:
   enabled: true
 
-#============================== Kibana =========================================
+#============================== Kibana =======================================
 setup.kibana:
-  host: "${KIBANA_HOST}:80"
+  host: "${KIBANA_HOST}:5601"
   username: ${ELASTICSEARCH_USERNAME}
   password: ${ELASTICSEARCH_PASSWORD}
 
-#============================== Xpack Monitoring ===============================
-xpack.monitoring:
+#============================== Monitoring ===================================
+# In Elastic 8.x+, use monitoring.* instead of deprecated xpack.monitoring.*
+monitoring:
   enabled: true
   elasticsearch:
+    hosts: ["${ELASTICSEARCH_HOST}:9200"]
+    username: ${ELASTICSEARCH_USERNAME}
+    password: ${ELASTICSEARCH_PASSWORD}
+
+#============================== Logging ======================================
+logging.level: info
+logging.to_files: false

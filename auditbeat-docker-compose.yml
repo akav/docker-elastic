@@ -1,21 +1,17 @@
-version: "3.8"
-
+# Auditbeat 9.x Docker Swarm Deployment
 # https://www.elastic.co/guide/en/beats/auditbeat/current/auditbeat-overview.html
-# Does not look like Auditd is supported in Alpine linux: https://github.com/linuxkit/linuxkit/issues/52
+# Note: Auditd is not supported in Alpine Linux: https://github.com/linuxkit/linuxkit/issues/52
 
 services:
 
   auditbeat:
-    image: docker.elastic.co/beats/auditbeat:${ELASTIC_VERSION:-7.9.1}
+    image: docker.elastic.co/beats/auditbeat:${ELASTIC_VERSION:-9.2.4}
     # https://github.com/docker/swarmkit/issues/1951
     hostname: "{{.Node.Hostname}}-auditbeat"
-    # Need to override user so we can access the log files, and docker.sock
+    # Need to override user so we can access the log files
     user: root
     # https://www.elastic.co/guide/en/beats/auditbeat/current/running-on-docker.html#_special_requirements
-    # PID and CAP_ADD options are ignored as they are Not yet available in swarm mode at the moment.
-    # Eagerly waiting for Docker 19.06 release which will bring --privileged flag to Docker
-    # Swarm Mode https://github.com/moby/moby/issues/24862#issuecomment-451594187
-    # support for capabilities https://github.com/moby/moby/pull/38380
+    # PID and CAP_ADD options require Docker 19.06+ for Swarm mode support
     pid: host
     cap_add:
       - AUDIT_CONTROL
@@ -28,14 +24,28 @@ services:
     volumes:
       - auditbeat:/usr/share/auditbeat/data
       - /var/log:/var/log:ro
+      # Required for system module
+      - /etc/passwd:/hostfs/etc/passwd:ro
+      - /etc/group:/hostfs/etc/group:ro
     environment:
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-node1}
       - KIBANA_HOST=${KIBANA_HOST:-node1}
       - ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME:-elastic}
       - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme}
     command: ["--strict.perms=false"]
+    healthcheck:
+      test: ["CMD-SHELL", "auditbeat test config || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       mode: global
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
 networks:
   elastic:

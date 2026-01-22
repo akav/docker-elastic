@@ -1,59 +1,88 @@
-# https://github.com/elastic/beats/blob/master/filebeat/filebeat.reference.yml
+# Auditbeat 9.x Configuration
+# Reference: https://github.com/elastic/beats/blob/main/auditbeat/auditbeat.reference.yml
 
+#================================ Auditbeat Modules ===========================
 auditbeat.modules:
 
-- module: auditd
-  audit_rules: |
-    -w /etc/passwd -p wa -k identity
-    -a always,exit -F arch=b32 -S open,creat,truncate,ftruncate,openat,open_by_handle_at -F exit=-EPERM -k access
+  - module: auditd
+    # Detect changes to critical system files
+    audit_rules: |
+      # Monitor identity-related files
+      -w /etc/passwd -p wa -k identity
+      -w /etc/group -p wa -k identity
+      -w /etc/shadow -p wa -k identity
+      -w /etc/gshadow -p wa -k identity
+      # Monitor file access (32-bit and 64-bit)
+      -a always,exit -F arch=b32 -S open,creat,truncate,ftruncate,openat,open_by_handle_at -F exit=-EPERM -k access
+      -a always,exit -F arch=b64 -S open,creat,truncate,ftruncate,openat,open_by_handle_at -F exit=-EPERM -k access
 
-- module: file_integrity
-  paths:
-    - /bin
-    - /usr/bin
-    - /sbin
-    - /usr/sbin
-    - /etc
+  - module: file_integrity
+    paths:
+      - /bin
+      - /usr/bin
+      - /sbin
+      - /usr/sbin
+      - /etc
+    # Exclude noisy paths
+    exclude_files:
+      - '(?i)\.sw[nop]$'
+      - '~$'
+      - '/\.git($|/)'
+    scan_at_start: true
+    scan_rate_per_sec: 50 MiB
 
-- module: system
-  datasets:
-    - host # General host information, e.g. uptime, IPs
-    - user # User information
-  period: 1m
-  user.detect_password_changes: true
+  - module: system
+    datasets:
+      - host    # General host information (uptime, IPs)
+      - user    # User information
+    period: 1m
+    user.detect_password_changes: true
 
-- module: system
-  datasets:
-    - process # Started and stopped processes
-    - socket  # Opened and closed sockets
-  period: 1s
+  - module: system
+    datasets:
+      - process  # Started and stopped processes
+      - socket   # Opened and closed sockets
+    period: 1s
 
-#================================ Processors ===================================
+#================================ Processors =================================
 processors:
-- add_cloud_metadata: ~
-# - add_docker_metadata: ~
-# - add_locale: ~
-# - add_host_metadata:
-#     netinfo.enabled: true
-# - add_process_metadata: ~
+  - add_cloud_metadata: ~
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+  - add_locale:
+      format: offset
+  - add_host_metadata:
+      netinfo.enabled: true
+  - add_process_metadata:
+      match_pids: [process.pid]
 
-#========================== Elasticsearch output ===============================
+#========================== Elasticsearch Output =============================
 output.elasticsearch:
   hosts: ["${ELASTICSEARCH_HOST}:9200"]
   username: ${ELASTICSEARCH_USERNAME}
   password: ${ELASTICSEARCH_PASSWORD}
+  # Uncomment for SSL/TLS connections
+  #ssl.certificate_authorities: ["/etc/pki/root/ca.pem"]
 
-#============================== Dashboards =====================================
+#============================== Dashboards ===================================
 setup.dashboards:
   enabled: true
 
-#============================== Kibana =========================================
+#============================== Kibana =======================================
 setup.kibana:
-  host: "${KIBANA_HOST}:80"
+  host: "${KIBANA_HOST}:5601"
   username: ${ELASTICSEARCH_USERNAME}
   password: ${ELASTICSEARCH_PASSWORD}
 
-#============================== Xpack Monitoring ===============================
-xpack.monitoring:
+#============================== Monitoring ===================================
+# In Elastic 8.x+, use monitoring.* instead of deprecated xpack.monitoring.*
+monitoring:
   enabled: true
   elasticsearch:
+    hosts: ["${ELASTICSEARCH_HOST}:9200"]
+    username: ${ELASTICSEARCH_USERNAME}
+    password: ${ELASTICSEARCH_PASSWORD}
+
+#============================== Logging ======================================
+logging.level: info
+logging.to_files: false

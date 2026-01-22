@@ -1,9 +1,12 @@
-version: "3.8"
+# Packetbeat 9.x Docker Swarm Deployment
+# NOTE: Packetbeat does NOT work properly in Docker Swarm mode due to network requirements
+# For Swarm deployments, consider running Packetbeat outside of Swarm or using host network mode
+# https://www.elastic.co/guide/en/beats/packetbeat/current/running-on-docker.html
 
 services:
 
   packetbeat:
-    image: docker.elastic.co/beats/packetbeat:${ELASTIC_VERSION:-7.9.1}
+    image: docker.elastic.co/beats/packetbeat:${ELASTIC_VERSION:-9.2.4}
     # https://github.com/docker/swarmkit/issues/1951
     hostname: "{{.Node.Hostname}}-packetbeat"
     user: root
@@ -14,21 +17,30 @@ services:
         target: /usr/share/packetbeat/packetbeat.yml
     volumes:
       - packetbeat:/usr/share/packetbeat/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-node1}
       - KIBANA_HOST=${KIBANA_HOST:-node1}
       - ELASTICSEARCH_USERNAME=${ELASTICSEARCH_USERNAME:-elastic}
       - ELASTICSEARCH_PASSWORD=${ELASTICSEARCH_PASSWORD:-changeme}
-      # Eagerly waiting for Docker 19.06 release which will bring --privileged flag to Docker
-      # Swarm Mode https://github.com/moby/moby/issues/24862#issuecomment-451594187
-      # support for capabilities https://github.com/moby/moby/pull/38380
+    # Required capabilities for packet capture
     cap_add:
       - NET_RAW
       - NET_ADMIN
     command: ["--strict.perms=false"]
+    healthcheck:
+      test: ["CMD-SHELL", "packetbeat test config || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     deploy:
       mode: global
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
 
 networks:
   elastic:
